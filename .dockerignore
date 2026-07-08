@@ -1,0 +1,28 @@
+# Git and IDE
+.git
+.gitignore
+.cursor
+.vscode
+.idea
+*.iml
+
+# Backend
+backend/target
+backend/*.log
+backend/.mvn
+backend/mvnw
+backend/mvnw.cmd
+
+# Frontend
+frontend/node_modules
+frontend/dist
+frontend/.env
+frontend/.env.*
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.vite
+
+# OS and misc
+.DS_Store
+Thumbs.db
