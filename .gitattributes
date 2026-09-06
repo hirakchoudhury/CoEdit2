@@ -1,0 +1,4 @@
+# Maven wrapper: mvnw is a POSIX shell script and must keep LF endings,
+# otherwise it fails with "bad interpreter" on Linux/macOS/CI.
+mvnw    text eol=lf
+mvnw.cmd text eol=crlf
