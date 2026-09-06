@@ -1,0 +1,14 @@
+# Binds the Service's pod IPs into the ALB target group that Terraform owns.
+# This is why there is no Ingress: Terraform created the ALB so CloudFront
+# could reference its hostname at plan time.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: backend
+  namespace: coedit
+spec:
+  serviceRef:
+    name: backend
+    port: 8080
+  targetType: ip
+  targetGroupARN: PLACEHOLDER_TARGET_GROUP_ARN   # substituted by the deploy workflow

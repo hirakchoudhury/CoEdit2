@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and adjust. Do not commit terraform.tfvars.
+
+region  = "ap-south-1"
+project = "coedit"
+
+# Required: who is allowed to assume the CI role.
+github_repository = "hirakchoudhury/CoEdit2"
+github_deploy_ref = "refs/heads/main"
+
+# --- Cost controls. These defaults are the cheap end. ---
+single_nat_gateway = true          # false = one NAT per AZ, ~$35/mo each
+node_instance_types = ["t3.medium"]
+node_desired_size   = 2
+db_instance_class   = "db.t4g.micro"
+db_multi_az         = false        # true roughly doubles RDS cost
+redis_node_type     = "cache.t4g.micro"
+redis_replica_count = 1            # 0 removes failover and saves one node
+
+# Set false only if you intend to be able to `terraform destroy` the database.
+db_deletion_protection = true
