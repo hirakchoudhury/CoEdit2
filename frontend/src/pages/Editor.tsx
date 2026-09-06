@@ -10,7 +10,8 @@ import {
   uploadSnapshot,
   type PermissionDto,
 } from '../api/documents';
-import { WebSocketProvider } from '../sync/WebSocketProvider';
+import { WebSocketProvider, type PresenceCursor } from '../sync/WebSocketProvider';
+import { diffSplice, transformCaret } from '../sync/textDiff';
 import type { DocumentDto } from '../api/documents';
 
 export default function Editor() {
@@ -19,6 +20,7 @@ export default function Editor() {
   const [docMeta, setDocMeta] = useState<DocumentDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<Record<string, string>>({});
+  const [cursors, setCursors] = useState<Record<string, PresenceCursor>>({});
   const [connected, setConnected] = useState(false);
   const [permissions, setPermissions] = useState<PermissionDto[]>([]);
   const [shareEmail, setShareEmail] = useState('');
@@ -65,13 +67,15 @@ export default function Editor() {
     const provider = new WebSocketProvider({
       documentId,
       token,
+      userId: currentUserId,
       ydoc,
       onSnapshotUpload: async (state) => {
         await uploadSnapshot(documentId, state);
       },
-      onPresence: (u) => {
+      onPresence: (u, c) => {
         if (!cancelled) {
           setUsers(u);
+          setCursors(c);
         }
       },
       onSync: (c) => {
@@ -86,7 +90,7 @@ export default function Editor() {
       providerRef.current = null;
       ydocRef.current = null;
     };
-  }, [documentId, navigate]);
+  }, [documentId, navigate, currentUserId]);
 
   useEffect(() => {
     const ydoc = ydocRef.current;
@@ -95,25 +99,46 @@ export default function Editor() {
 
     const ytext = ydoc.getText('content');
 
-    const observer = () => {
-      textarea.value = ytext.toString();
-    };
-    ytext.observe(observer);
-    observer();
+    // Render Yjs -> textarea, preserving the caret across remote edits.
+    const render = () => {
+      const next = ytext.toString();
+      const prev = textarea.value;
+      if (prev === next) return; // local echo: textarea is already correct
 
+      const hadFocus = document.activeElement === textarea;
+      const selStart = textarea.selectionStart;
+      const selEnd = textarea.selectionEnd;
+
+      textarea.value = next;
+
+      if (hadFocus) {
+        // Assigning .value drops the caret at the end; put it back where the
+        // user actually was, shifted by whatever the remote edit did.
+        textarea.selectionStart = transformCaret(prev, next, selStart);
+        textarea.selectionEnd = transformCaret(prev, next, selEnd);
+      }
+    };
+    ytext.observe(render);
+    render();
+
+    // Apply textarea -> Yjs as the single splice that actually changed, so
+    // concurrent edits at different positions merge instead of clobbering.
     const onInput = () => {
-      const pos = textarea.selectionStart;
-      const length = textarea.selectionEnd - pos;
       const newText = textarea.value;
-      ytext.delete(0, ytext.length);
-      ytext.insert(0, newText);
-      providerRef.current?.sendCursor(pos, length);
+      const splice = diffSplice(ytext.toString(), newText);
+      if (splice) {
+        const { start, endPrev, endNext } = splice;
+        ydoc.transact(() => {
+          if (endPrev > start) ytext.delete(start, endPrev - start);
+          if (endNext > start) ytext.insert(start, newText.slice(start, endNext));
+        });
+      }
+      providerRef.current?.sendCursor(textarea.selectionStart, textarea.selectionEnd - textarea.selectionStart);
     };
 
     const onSelect = () => {
       const pos = textarea.selectionStart;
-      const length = textarea.selectionEnd - pos;
-      providerRef.current?.sendCursor(pos, length);
+      providerRef.current?.sendCursor(pos, textarea.selectionEnd - pos);
     };
 
     textarea.addEventListener('input', onInput);
@@ -121,7 +146,7 @@ export default function Editor() {
     textarea.addEventListener('keyup', onSelect);
 
     return () => {
-      ytext.unobserve(observer);
+      ytext.unobserve(render);
       textarea.removeEventListener('input', onInput);
       textarea.removeEventListener('select', onSelect);
       textarea.removeEventListener('keyup', onSelect);
@@ -219,7 +244,13 @@ export default function Editor() {
         </div>
         {userList.length > 0 && (
           <div style={{ fontSize: 14, color: '#a1a1aa' }}>
-            Online: {userList.map(([, email]) => email).join(', ')}
+            Online:{' '}
+            {userList
+              .map(([id, email]) => {
+                const c = cursors[id];
+                return c ? `${email} (@${c.index})` : email;
+              })
+              .join(', ')}
           </div>
         )}
       </header>

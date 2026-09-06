@@ -25,7 +25,7 @@ public class RedisDocumentUpdateListener implements MessageListener {
 
     @PostConstruct
     public void subscribe() {
-        redisMessageListenerContainer.addMessageListener(this, new ChannelTopic("doc:updates"));
+        redisMessageListenerContainer.addMessageListener(this, new ChannelTopic(RedisDocumentUpdatePublisher.CHANNEL));
     }
 
     @Override
@@ -37,7 +37,11 @@ public class RedisDocumentUpdateListener implements MessageListener {
             String documentId = (String) msg.get("documentId");
             String payloadB64 = (String) msg.get("payload");
             String senderId = (String) msg.get("senderId");
+            String instanceId = (String) msg.get("instanceId");
             if (documentId == null || payloadB64 == null) return;
+            // Redis delivers to the publisher too; this instance already
+            // relayed its own updates in handleBinaryMessage.
+            if (RedisDocumentUpdatePublisher.INSTANCE_ID.equals(instanceId)) return;
             byte[] payload = Base64.getDecoder().decode(payloadB64);
             collabWebSocketHandler.onRedisUpdate(documentId, payload, senderId);
         } catch (Exception e) {
