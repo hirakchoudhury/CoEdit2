@@ -109,7 +109,11 @@ public class CollabWebSocketHandler extends TextWebSocketHandler {
         broadcastPresence(docId, PresenceMessage.Type.LEAVE, principal.userId(), principal.userEmail(), null);
     }
 
-    /** Called when Redis delivers an update from another instance */
+    /**
+     * Called when Redis delivers an update that originated on ANOTHER instance.
+     * Updates from this instance are filtered out in RedisDocumentUpdateListener,
+     * because handleBinaryMessage already relayed them to local peers.
+     */
     public void onRedisUpdate(String documentId, byte[] payload, String senderId) {
         broadcastCrdtToPeers(documentId, payload, senderId, null);
     }

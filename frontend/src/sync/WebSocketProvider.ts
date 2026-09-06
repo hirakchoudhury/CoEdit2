@@ -15,6 +15,8 @@ export type PresenceCursor = { index: number; length: number };
 export interface WebSocketProviderOptions {
   documentId: string;
   token: string;
+  /** Our own user id, so we can ignore our own JOIN echo. */
+  userId?: string | null;
   ydoc: Y.Doc;
   onSnapshotUpload: (state: Uint8Array) => Promise<void>;
   onPresence?: (users: Record<string, string>, cursors: Record<string, PresenceCursor>) => void;
@@ -24,12 +26,19 @@ export interface WebSocketProviderOptions {
 /**
  * Custom Yjs sync over WebSocket: send binary Yjs updates, receive and apply.
  * Presence via text messages (join/leave/cursor). Snapshot upload every N updates or T seconds.
+ *
+ * Remote updates are applied with `this` as the transaction origin so the local
+ * `update` handler can tell them apart from genuine local edits and not echo
+ * them straight back to the server.
  */
 export class WebSocketProvider {
   private ws: WebSocket | null = null;
   private options: WebSocketProviderOptions;
   private updateCount = 0;
   private snapshotTimer: ReturnType<typeof setInterval> | null = null;
+  private users: Record<string, string> = {};
+  private cursors: Record<string, PresenceCursor> = {};
+  private readonly updateHandler: (update: Uint8Array, origin: unknown) => void;
 
   constructor(options: WebSocketProviderOptions) {
     this.options = options;
@@ -41,6 +50,8 @@ export class WebSocketProvider {
     this.ws.onopen = () => {
       onSync?.(true);
       this.scheduleSnapshot();
+      // Offer whatever we already have so peers can merge it.
+      this.sendFullState();
     };
 
     this.ws.onclose = () => {
@@ -51,39 +62,83 @@ export class WebSocketProvider {
     this.ws.onmessage = (event: MessageEvent) => {
       if (event.data instanceof ArrayBuffer) {
         const update = new Uint8Array(event.data);
-        Y.applyUpdate(ydoc, update);
+        if (update.length === 0) return;
+        // Origin `this` marks the change as remote -> updateHandler skips it.
+        Y.applyUpdate(ydoc, update, this);
         this.updateCount++;
         if (this.updateCount % SNAPSHOT_UPDATES_THRESHOLD === 0) {
           this.uploadSnapshot();
         }
       } else if (typeof event.data === 'string') {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'presence_snapshot' && this.options.onPresence) {
-            const users: Record<string, string> = msg.users || {};
-            const cursors: Record<string, PresenceCursor> = {};
-            for (const [uid, c] of Object.entries(msg.cursors || {})) {
-              const o = c as { index?: number; length?: number };
-              cursors[uid] = { index: o.index ?? 0, length: o.length ?? 0 };
-            }
-            this.options.onPresence(users, cursors);
-          } else if ((msg.type === 'JOIN' || msg.type === 'LEAVE' || msg.type === 'CURSOR') && this.options.onPresence) {
-            // Server sends PresenceMessage; we could refetch snapshot or merge incrementally. For simplicity re-request not implemented; presence_snapshot on join is enough.
-          }
-        } catch {
-          // ignore
-        }
+        this.handlePresenceMessage(event.data);
       }
     };
 
-    ydoc.on('update', (update: Uint8Array) => {
+    this.updateHandler = (update: Uint8Array, origin: unknown) => {
+      // Updates we just applied from the network must not be sent back out.
+      if (origin === this) return;
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       this.ws.send(update);
       this.updateCount++;
       if (this.updateCount % SNAPSHOT_UPDATES_THRESHOLD === 0) {
         this.uploadSnapshot();
       }
-    });
+    };
+    ydoc.on('update', this.updateHandler);
+  }
+
+  private handlePresenceMessage(raw: string) {
+    let msg: any;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'presence_snapshot') {
+      this.users = { ...(msg.users || {}) };
+      this.cursors = {};
+      for (const [uid, c] of Object.entries(msg.cursors || {})) {
+        const o = c as { index?: number; length?: number };
+        this.cursors[uid] = { index: o.index ?? 0, length: o.length ?? 0 };
+      }
+      this.emitPresence();
+      return;
+    }
+
+    const uid = msg.userId != null ? String(msg.userId) : null;
+    if (!uid) return;
+
+    if (msg.type === 'JOIN') {
+      this.users[uid] = msg.userEmail ?? '';
+      this.emitPresence();
+      // A peer that just joined has no idea what we have. The server relays
+      // binary frames blindly, so pushing our state reaches them directly.
+      if (uid !== this.options.userId) this.sendFullState();
+    } else if (msg.type === 'LEAVE') {
+      delete this.users[uid];
+      delete this.cursors[uid];
+      this.emitPresence();
+    } else if (msg.type === 'CURSOR') {
+      if (msg.userEmail) this.users[uid] = msg.userEmail;
+      this.cursors[uid] = {
+        index: msg.cursor?.index ?? 0,
+        length: msg.cursor?.length ?? 0,
+      };
+      this.emitPresence();
+    }
+  }
+
+  private emitPresence() {
+    this.options.onPresence?.({ ...this.users }, { ...this.cursors });
+  }
+
+  private sendFullState() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const state = Y.encodeStateAsUpdate(this.options.ydoc);
+    if (state.length === 0) return;
+    this.ws.send(state);
   }
 
   private scheduleSnapshot() {
@@ -111,7 +166,11 @@ export class WebSocketProvider {
 
   destroy() {
     this.clearSnapshotTimer();
+    this.options.ydoc.off('update', this.updateHandler);
     if (this.ws) {
+      this.ws.onmessage = null;
+      this.ws.onopen = null;
+      this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }

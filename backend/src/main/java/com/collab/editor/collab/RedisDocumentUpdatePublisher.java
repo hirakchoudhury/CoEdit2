@@ -20,7 +20,10 @@ import java.util.Map;
 @Slf4j
 public class RedisDocumentUpdatePublisher {
 
-    public static final String CHANNEL_PREFIX = "doc:updates:";
+    public static final String CHANNEL = "doc:updates";
+
+    /** Identifies this JVM so it can ignore its own Pub/Sub echo. */
+    public static final String INSTANCE_ID = java.util.UUID.randomUUID().toString();
 
     private final RedisTemplate<String, String> stringRedisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -31,8 +34,9 @@ public class RedisDocumentUpdatePublisher {
             msg.put("documentId", documentId);
             msg.put("payload", Base64.getEncoder().encodeToString(payload));
             msg.put("senderId", senderId);
+            msg.put("instanceId", INSTANCE_ID);
             String json = objectMapper.writeValueAsString(msg);
-            stringRedisTemplate.convertAndSend("doc:updates", json);
+            stringRedisTemplate.convertAndSend(CHANNEL, json);
         } catch (JsonProcessingException e) {
             log.warn("Failed to publish update: {}", e.getMessage());
         }
