@@ -12,6 +12,7 @@ import {
 } from '../api/documents';
 import { WebSocketProvider, type PresenceCursor } from '../sync/WebSocketProvider';
 import { diffSplice, transformCaret } from '../sync/textDiff';
+import RemoteCursors, { colorForUser } from '../components/RemoteCursors';
 import type { DocumentDto } from '../api/documents';
 
 export default function Editor() {
@@ -21,6 +22,8 @@ export default function Editor() {
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<Record<string, string>>({});
   const [cursors, setCursors] = useState<Record<string, PresenceCursor>>({});
+  // Mirrors the textarea value so the cursor overlay can re-measure.
+  const [text, setText] = useState('');
   const [connected, setConnected] = useState(false);
   const [permissions, setPermissions] = useState<PermissionDto[]>([]);
   const [shareEmail, setShareEmail] = useState('');
@@ -110,6 +113,23 @@ export default function Editor() {
       const selEnd = textarea.selectionEnd;
 
       textarea.value = next;
+      setText(next);
+
+      // A remote caret is an index into the old text. When the document
+      // changes underneath it, shift it by the same edit or it drifts.
+      setCursors((prevCursors) => {
+        const entries = Object.entries(prevCursors);
+        if (entries.length === 0) return prevCursors;
+        let changed = false;
+        const moved: Record<string, PresenceCursor> = {};
+        for (const [uid, c] of entries) {
+          const i = transformCaret(prev, next, c.index);
+          const e = transformCaret(prev, next, c.index + c.length);
+          if (i !== c.index || e - i !== c.length) changed = true;
+          moved[uid] = { index: i, length: Math.max(0, e - i) };
+        }
+        return changed ? moved : prevCursors;
+      });
 
       if (hadFocus) {
         // Assigning .value drops the caret at the end; put it back where the
@@ -120,11 +140,13 @@ export default function Editor() {
     };
     ytext.observe(render);
     render();
+    setText(ytext.toString());
 
     // Apply textarea -> Yjs as the single splice that actually changed, so
     // concurrent edits at different positions merge instead of clobbering.
     const onInput = () => {
       const newText = textarea.value;
+      setText(newText);
       const splice = diffSplice(ytext.toString(), newText);
       if (splice) {
         const { start, endPrev, endNext } = splice;
@@ -144,12 +166,16 @@ export default function Editor() {
     textarea.addEventListener('input', onInput);
     textarea.addEventListener('select', onSelect);
     textarea.addEventListener('keyup', onSelect);
+    textarea.addEventListener('mouseup', onSelect);
+    textarea.addEventListener('focus', onSelect);
 
     return () => {
       ytext.unobserve(render);
       textarea.removeEventListener('input', onInput);
       textarea.removeEventListener('select', onSelect);
       textarea.removeEventListener('keyup', onSelect);
+      textarea.removeEventListener('mouseup', onSelect);
+      textarea.removeEventListener('focus', onSelect);
     };
   }, [docMeta]);
 
@@ -244,13 +270,29 @@ export default function Editor() {
         </div>
         {userList.length > 0 && (
           <div style={{ fontSize: 14, color: '#a1a1aa' }}>
-            Online:{' '}
-            {userList
-              .map(([id, email]) => {
-                const c = cursors[id];
-                return c ? `${email} (@${c.index})` : email;
-              })
-              .join(', ')}
+            <span style={{ marginRight: 6 }}>Online:</span>
+            {userList.map(([id, email]) => (
+              <span
+                key={id}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  marginRight: 10,
+                  color: '#d4d4d8',
+                }}
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: colorForUser(id),
+                  }}
+                />
+                {email}
+              </span>
+            ))}
           </div>
         )}
       </header>
@@ -311,25 +353,39 @@ export default function Editor() {
         </p>
       )}
 
-      <textarea
-        ref={editorRef}
-        placeholder="Start typing..."
-        readOnly={!canWrite}
-        style={{
-          width: '100%',
-          minHeight: 400,
-          padding: 16,
-          borderRadius: 8,
-          border: '1px solid #3f3f46',
-          background: '#27272a',
-          color: '#e4e4e7',
-          fontSize: 16,
-          lineHeight: 1.5,
-          resize: 'vertical',
-          opacity: canWrite ? 1 : 0.75,
-        }}
-        spellCheck
-      />
+      {/* position: relative anchors the cursor overlay to the textarea box. */}
+      <div style={{ position: 'relative' }}>
+        <textarea
+          ref={editorRef}
+          placeholder="Start typing..."
+          readOnly={!canWrite}
+          style={{
+            width: '100%',
+            minHeight: 400,
+            padding: 16,
+            borderRadius: 8,
+            border: '1px solid #3f3f46',
+            background: '#27272a',
+            color: '#e4e4e7',
+            fontSize: 16,
+            lineHeight: 1.5,
+            resize: 'vertical',
+            opacity: canWrite ? 1 : 0.75,
+            display: 'block',
+            // The mirror cannot reproduce a horizontal scroll offset, so keep
+            // wrapping on and let the overlay handle vertical scroll only.
+            overflowX: 'hidden',
+          }}
+          spellCheck
+        />
+        <RemoteCursors
+          textareaRef={editorRef}
+          text={text}
+          cursors={cursors}
+          users={users}
+          selfId={currentUserId}
+        />
+      </div>
     </div>
   );
 }
