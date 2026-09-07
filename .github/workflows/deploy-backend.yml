@@ -20,13 +20,16 @@ permissions:
 
 jobs:
   deploy:
+    # Skips (rather than fails) until the AWS repo variables exist, so an
+    # un-provisioned account does not paint every push red.
+    if: vars.AWS_ROLE_ARN != '' && vars.AWS_REGION != ''
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
