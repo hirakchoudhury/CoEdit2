@@ -1,0 +1,111 @@
+name: Deploy backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "docker/backend.Dockerfile"
+      - "k8s/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false   # never interrupt a rollout
+
+permissions:
+  id-token: write   # required for OIDC federation
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: image
+        env:
+          REPO: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA::12}"
+          NAME="${REPO##*/}"
+
+          # The repository is IMMUTABLE, so pushing an existing tag fails.
+          # Re-running a workflow on the same commit must stay idempotent.
+          if aws ecr describe-images --repository-name "$NAME"                --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
+            echo "$REPO:$TAG already published, reusing it"
+          else
+            docker build -f docker/backend.Dockerfile -t "$REPO:$TAG" .
+            docker push "$REPO:$TAG"
+          fi
+          echo "ref=$REPO:$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ vars.EKS_CLUSTER_NAME }}" \
+            --region "${{ vars.AWS_REGION }}"
+
+      - name: Project runtime secrets into the cluster
+        env:
+          SECRET_NAME: ${{ vars.APP_SECRET_NAME }}
+        run: |
+          set -euo pipefail
+          kubectl apply -f k8s/namespace.yaml
+
+          # Pull the JSON blob and turn it into a Secret's literal keys.
+          # --from-env-file reads from a file so values never appear in argv,
+          # and the file lands in the runner's tmpfs only.
+          umask 077
+          aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_NAME" \
+            --query SecretString --output text \
+          | jq -r 'to_entries[] | "\(.key)=\(.value)"' > /tmp/app.env
+
+          kubectl create secret generic coedit-app \
+            --namespace coedit \
+            --from-env-file=/tmp/app.env \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          shred -u /tmp/app.env
+
+      - name: Render and apply manifests
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+          TG_ARN: ${{ vars.TARGET_GROUP_ARN }}
+        run: |
+          set -euo pipefail
+          test -n "$TG_ARN" || { echo "TARGET_GROUP_ARN variable is not set"; exit 1; }
+          sed -i "s|PLACEHOLDER_TARGET_GROUP_ARN|${TG_ARN}|" k8s/targetgroupbinding.yaml
+          sed -i "s|PLACEHOLDER_IMAGE|${IMAGE}|" k8s/deployment.yaml
+          if grep -l PLACEHOLDER k8s/*.yaml; then
+            echo "unsubstituted placeholder remains in the files above"
+            exit 1
+          fi
+          # kubectl has kustomize built in; no separate CLI needed.
+          kubectl apply -k k8s/
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/backend -n coedit --timeout=5m
+
+      - name: Report failure detail
+        if: failure()
+        run: |
+          kubectl get pods -n coedit -o wide || true
+          kubectl describe deployment/backend -n coedit || true
+          kubectl logs -n coedit -l app=backend --tail=100 --all-containers || true
