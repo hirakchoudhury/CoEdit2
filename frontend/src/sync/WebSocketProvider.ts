@@ -1,9 +1,28 @@
 import * as Y from 'yjs';
 
+/**
+ * Origin to open the WebSocket against.
+ *
+ * Same-origin deploys (one host serving both the SPA and the API) need no
+ * configuration and fall through to window.location.
+ *
+ * Split deploys - a static frontend on one host, the API on another - set
+ * VITE_API_URL, and the socket follows it automatically. VITE_WS_URL exists
+ * only for the case where the socket lives somewhere else again.
+ */
 const WS_BASE = (() => {
+  const toWs = (origin: string) =>
+    `${origin.startsWith('https:') ? 'wss:' : 'ws:'}//${new URL(origin).host}`;
+
+  const explicit = import.meta.env.VITE_WS_URL;
+  if (explicit) return explicit.replace(/\/+$/, '');
+
+  const api = import.meta.env.VITE_API_URL;
+  if (api && /^https?:\/\//.test(api)) return toWs(api);
+
   if (typeof window === 'undefined') return '';
   const p = window.location;
-  return (p.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + p.host;
+  return `${p.protocol === 'https:' ? 'wss:' : 'ws:'}//${p.host}`;
 })();
 
 const SNAPSHOT_UPDATES_THRESHOLD = 50;

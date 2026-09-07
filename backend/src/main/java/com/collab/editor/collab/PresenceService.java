@@ -29,8 +29,12 @@ public class PresenceService {
     }
 
     public void leave(String documentId, UUID userId) {
-        String key = presenceKey(documentId);
-        binaryRedisTemplate.opsForHash().delete(key, userId.toString());
+        String field = userId.toString();
+        binaryRedisTemplate.opsForHash().delete(presenceKey(documentId), field);
+        // The cursor lives in a separate hash. Leaving it behind meant a
+        // departed user's caret stayed in the presence snapshot until the
+        // 30-minute TTL expired, and was replayed to every new joiner.
+        binaryRedisTemplate.opsForHash().delete(cursorKey(documentId), field);
     }
 
     public void updateCursor(String documentId, UUID userId, CursorPosition cursor) {

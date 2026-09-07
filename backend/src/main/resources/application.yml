@@ -7,7 +7,8 @@ spring:
     locations: classpath:db/migration
 
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:collab_editor}
+    # POSTGRES_SSLMODE=require for Neon/RDS; disable for the local container.
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:collab_editor}?sslmode=${POSTGRES_SSLMODE:disable}
     username: ${POSTGRES_USER:postgres}
     password: ${POSTGRES_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -34,7 +35,8 @@ spring:
         enabled: ${REDIS_SSL:false}
 
 server:
-  port: ${SERVER_PORT:8080}
+  # Railway and most PaaS inject PORT; SERVER_PORT stays as the local override.
+  port: ${PORT:${SERVER_PORT:8080}}
 
 # Only health is exposed; probe groups back the k8s liveness/readiness endpoints.
 management:

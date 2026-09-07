@@ -1,0 +1,3 @@
+# SPA fallback for Cloudflare Pages and Netlify: React Router owns the routes,
+# so every unmatched path must serve the app shell rather than a 404.
+/*  /index.html  200

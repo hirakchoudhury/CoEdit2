@@ -81,7 +81,12 @@ export default function RemoteCursors({ textareaRef, text, cursors, users, selfI
     const mirror = mirrorRef.current;
     if (!ta || !mirror) return;
 
-    const others = Object.entries(cursors).filter(([id]) => id !== selfId);
+    // Only draw carets for users who are actually present. A cursor without a
+    // matching presence entry is stale state, and would otherwise render as a
+    // ghost caret labelled with a raw user id.
+    const others = Object.entries(cursors).filter(
+      ([id]) => id !== selfId && users[id] !== undefined,
+    );
     if (others.length === 0) {
       setDrawn([]);
       return;
@@ -156,7 +161,7 @@ export default function RemoteCursors({ textareaRef, text, cursors, users, selfI
 
       next.push({
         userId,
-        label: users[userId] || userId.slice(0, 8),
+        label: users[userId] || 'unknown',
         color: colorForUser(userId),
         caret: toLocal(caretRect),
         selection,
