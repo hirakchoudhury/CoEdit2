@@ -1,5 +1,27 @@
 # Deploying to Railway + Neon + a static host
 
+> **Status: live.** Provisioned and verified on 2026-09-09.
+>
+> | | |
+> |---|---|
+> | App | https://coedit.pages.dev |
+> | API | https://backend-production-ecc1.up.railway.app |
+> | Railway project | `coedit` (`90f5098f-67c0-416e-b5f6-301238295e43`) |
+> | Neon project | `coedit` (`broad-lab-72739340`, `aws-us-east-2`) |
+> | Cloudflare account | `51d0fda3050eea9ee969d92fe5b4a60d` |
+>
+> Backend deploys automatically from `main` (Railway's GitHub integration).
+> The frontend deploys via `.github/workflows/deploy-pages.yml`, which needs
+> the `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` and
+> `VITE_API_URL` repository variables. Until those exist the job skips, and
+> the frontend must be published manually:
+>
+> ```bash
+> cd frontend
+> VITE_API_URL=https://backend-production-ecc1.up.railway.app npm run build
+> wrangler pages deploy dist --project-name coedit --branch main
+> ```
+
 A split deploy: the API on Railway, Postgres on Neon, and the SPA on any
 static host. This is the cheap alternative to `infra/` (AWS), which costs
 $230–290/month.
@@ -160,3 +182,20 @@ SPA built for a foreign API origin and served on a different port:
 - **`setAllowedOrigins("*")` on the WebSocket.** The handshake is authenticated
   by JWT, so this is not an open door, but it is broader than the REST CORS
   policy. Tighten it in `WebSocketConfig` if you want them to match.
+
+## Follow-ups
+
+- **`railway.json` is deprecated.** Railway now prefers Infrastructure as Code
+  at `.railway/railway.ts`; the existing file keeps working until 2026-12-01.
+  `railway config migrate --apply` performs the conversion, but it also
+  rewrites live service settings, so it was deliberately not run against a
+  working deployment. Do it deliberately, not as a side effect.
+- **Neon lives in `aws-us-east-2`.** From India that adds roughly 200ms per
+  database round trip. The Railway service is in the same region, so the
+  backend-to-database hop is fast; only the user-to-backend hop is long.
+  Moving both to `ap-south-1`/`ap-southeast-1` would help, and the database is
+  small enough to recreate cheaply.
+- **Only `https://coedit.pages.dev` is in `CORS_ALLOWED_ORIGINS`.** Every Pages
+  deployment also gets a unique preview URL (`https://<hash>.coedit.pages.dev`),
+  which is a different origin and will fail CORS. Add previews explicitly if
+  you want to test them against the live API.
