@@ -542,3 +542,169 @@ h3 {
     width: 100%;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Document editing surface
+   ---------------------------------------------------------------------------
+   The editor is a sheet of paper, not a form field. Two consequences:
+
+   1. The measure is capped near 70 characters. At full page width the text ran
+      to ~119 characters per line, roughly double the comfortable reading range,
+      which makes it hard to track your place while editing.
+   2. The textarea grows to fit its content (height is set from scrollHeight in
+      JS) so the *page* scrolls. Previously a long document scrolled inside a
+      static 420px box while the page itself never moved.
+   --------------------------------------------------------------------------- */
+
+.doc-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  margin-bottom: 14px;
+  background: var(--bg);
+  border-bottom: 1px solid transparent;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+/* Only separate the header from the text once the page has actually scrolled. */
+.doc-header[data-stuck='true'] {
+  border-bottom-color: var(--border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.doc-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  background: transparent;
+  min-width: 0;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+/* Editable titles must look editable on hover, or nobody discovers them. */
+button.doc-title:hover {
+  background: var(--card-hover);
+  border-color: var(--border);
+}
+
+input.doc-title {
+  background: var(--bg-soft);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+  outline: none;
+}
+
+.doc-sheet {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 44px 0 56px;
+  min-height: 60vh;
+}
+
+.doc-measure {
+  /* ~70 characters at 17px. `ch` tracks the font, so this holds if the font
+     changes. */
+  max-width: 70ch;
+  margin: 0 auto;
+  padding: 0 28px;
+  position: relative;
+}
+
+.doc-textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.75;
+  padding: 0;
+  /* Height is driven from content in JS; no scrollbar, no resize grip. */
+  resize: none;
+  overflow: hidden;
+  display: block;
+  min-height: 40vh;
+}
+
+.doc-textarea:focus {
+  outline: none;
+}
+
+.doc-textarea[readonly] {
+  opacity: 0.8;
+}
+
+.doc-hint {
+  position: absolute;
+  top: 0;
+  left: 28px;
+  right: 28px;
+  pointer-events: none;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.75;
+}
+
+.doc-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* A collaborator who has moved their cursor very recently is "typing". */
+.avatar-active {
+  animation: avatar-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes avatar-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--primary-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+@media (max-width: 640px) {
+  .doc-sheet {
+    padding: 24px 0 36px;
+    border-radius: var(--radius-sm);
+  }
+
+  .doc-measure {
+    padding: 0 16px;
+  }
+
+  .doc-hint {
+    left: 16px;
+    right: 16px;
+  }
+
+  .doc-title {
+    max-width: 100%;
+    font-size: 17px;
+  }
+
+  .doc-textarea {
+    font-size: 16px;
+  }
+}

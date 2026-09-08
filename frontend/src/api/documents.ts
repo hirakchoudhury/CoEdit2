@@ -39,6 +39,13 @@ export async function getDocument(documentId: string): Promise<DocumentDto> {
   return api<DocumentDto>(`/api/documents/${documentId}`);
 }
 
+export async function renameDocument(documentId: string, title: string): Promise<DocumentDto> {
+  return api<DocumentDto>(`/api/documents/${documentId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  });
+}
+
 export async function getSnapshot(documentId: string): Promise<SnapshotResponse> {
   return api<SnapshotResponse>(`/api/documents/${documentId}/snapshot`);
 }

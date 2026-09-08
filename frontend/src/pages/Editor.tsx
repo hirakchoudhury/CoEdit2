@@ -8,6 +8,7 @@ import {
   listPermissions,
   revokePermission,
   uploadSnapshot,
+  renameDocument,
   type PermissionDto,
 } from '../api/documents';
 import { WebSocketProvider, type PresenceCursor } from '../sync/WebSocketProvider';
@@ -30,6 +31,13 @@ export default function Editor() {
   // Snapshot uploads are the only durable save; surface them rather than
   // leaving the user guessing whether their work is persisted.
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const [stuck, setStuck] = useState(false);
+  // userId -> timestamp of their last cursor movement, used to show who is
+  // actively editing. Derived from presence we already receive.
+  const [activity, setActivity] = useState<Record<string, number>>({});
+  const [now, setNow] = useState(() => Date.now());
   const [connected, setConnected] = useState(false);
   const [permissions, setPermissions] = useState<PermissionDto[]>([]);
   const [shareEmail, setShareEmail] = useState('');
@@ -39,6 +47,7 @@ export default function Editor() {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const ydocRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<WebSocketProvider | null>(null);
+  const stickySentinelRef = useRef<HTMLDivElement>(null);
   const currentUserId = localStorage.getItem('userId');
   const isOwner = !!(docMeta && currentUserId && docMeta.ownerId === currentUserId);
   const canWrite = !!(isOwner || permissions.some((p) => p.userId === currentUserId && p.permission === 'WRITE'));
@@ -89,10 +98,22 @@ export default function Editor() {
         }
       },
       onPresence: (u, c) => {
-        if (!cancelled) {
-          setUsers(u);
-          setCursors(c);
-        }
+        if (cancelled) return;
+        setUsers(u);
+        setCursors((prev) => {
+          const moved = Object.entries(c).filter(
+            ([id, cur]) => !prev[id] || prev[id].index !== cur.index || prev[id].length !== cur.length,
+          );
+          if (moved.length > 0) {
+            const stamp = Date.now();
+            setActivity((a) => {
+              const next = { ...a };
+              for (const [id] of moved) next[id] = stamp;
+              return next;
+            });
+          }
+          return c;
+        });
       },
       onSync: (c) => {
         if (!cancelled) setConnected(c);
@@ -115,6 +136,13 @@ export default function Editor() {
 
     const ytext = ydoc.getText('content');
 
+    // The textarea has no scrollbar of its own; it grows to fit. Reset to
+    // auto first so the height can shrink when text is deleted.
+    const autoGrow = () => {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    };
+
     // Render Yjs -> textarea, preserving the caret across remote edits.
     const render = () => {
       const next = ytext.toString();
@@ -126,6 +154,7 @@ export default function Editor() {
       const selEnd = textarea.selectionEnd;
 
       textarea.value = next;
+      autoGrow();
       setText(next);
 
       // A remote caret is an index into the old text. When the document
@@ -154,11 +183,16 @@ export default function Editor() {
     ytext.observe(render);
     render();
     setText(ytext.toString());
+    autoGrow();
+
+    const onResize = () => autoGrow();
+    window.addEventListener('resize', onResize);
 
     // Apply textarea -> Yjs as the single splice that actually changed, so
     // concurrent edits at different positions merge instead of clobbering.
     const onInput = () => {
       const newText = textarea.value;
+      autoGrow();
       setText(newText);
       const splice = diffSplice(ytext.toString(), newText);
       if (splice) {
@@ -183,6 +217,7 @@ export default function Editor() {
     textarea.addEventListener('focus', onSelect);
 
     return () => {
+      window.removeEventListener('resize', onResize);
       ytext.unobserve(render);
       textarea.removeEventListener('input', onInput);
       textarea.removeEventListener('select', onSelect);
@@ -220,6 +255,28 @@ export default function Editor() {
       clearInterval(interval);
     };
   }, [documentId, navigate]);
+
+  // A 1px sentinel sits directly above the sticky header. When it scrolls out
+  // of view the header is stuck. IntersectionObserver is used rather than a
+  // scroll listener: it does not fire on every frame, and it reports state
+  // rather than requiring us to infer it from a scroll offset.
+  useEffect(() => {
+    const sentinel = stickySentinelRef.current;
+    if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setStuck(!entry.isIntersecting),
+      { threshold: 1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [docMeta]);
+
+  useEffect(() => {
+    // Presence only arrives when someone moves. Without a ticker a "typing"
+    // badge would stay lit until their next keystroke.
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   if (error) {
     return (
@@ -264,6 +321,26 @@ export default function Editor() {
     }
   }
 
+  async function handleTitleSave() {
+    const next = (titleDraft ?? '').trim();
+    setTitleError(null);
+    if (!documentId || !next || next === docMeta?.title) {
+      setTitleDraft(null);
+      return;
+    }
+    // Optimistic: the title is cosmetic, and reverting on failure is cheap.
+    const previous = docMeta;
+    setDocMeta((d) => (d ? { ...d, title: next } : d));
+    setTitleDraft(null);
+    try {
+      const updated = await renameDocument(documentId, next);
+      setDocMeta(updated);
+    } catch (err) {
+      setDocMeta(previous);
+      setTitleError(err instanceof Error ? err.message : 'Could not rename');
+    }
+  }
+
   async function handleRevoke(targetUserId: string) {
     if (!documentId) return;
     try {
@@ -275,45 +352,60 @@ export default function Editor() {
   }
 
   const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const readingMinutes = Math.max(1, Math.round(wordCount / 200));
+  // Someone counts as "typing" if their cursor moved in the last 3 seconds.
+  const isActive = (id: string) => now - (activity[id] ?? 0) < 3000;
 
   return (
     <div className="page">
-      <header
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 18,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+      {/* Watched by the observer above; height 0 so it changes no layout. */}
+      <div ref={stickySentinelRef} aria-hidden="true" style={{ height: 1, marginBottom: -1 }} />
+
+      <header className="doc-header" data-stuck={stuck}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <Link to="/" className="btn btn-ghost btn-sm" aria-label="Back to documents">
-            &larr; Documents
+            &larr;
           </Link>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 20,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            title={docMeta.title}
-          >
-            {docMeta.title}
-          </h1>
+
+          {titleDraft !== null ? (
+            <input
+              className="doc-title"
+              value={titleDraft}
+              autoFocus
+              aria-label="Document title"
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={handleTitleSave}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleTitleSave();
+                } else if (e.key === 'Escape') {
+                  setTitleDraft(null);
+                }
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="doc-title"
+              title={canWrite ? 'Click to rename' : docMeta.title}
+              disabled={!canWrite}
+              onClick={() => canWrite && setTitleDraft(docMeta.title)}
+            >
+              {docMeta.title}
+            </button>
+          )}
+
+          {!canWrite && <span className="badge">Read-only</span>}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* Everyone else currently in the document. The avatar colour is the
-              same hash the cursor overlay uses, so the circle here matches the
-              caret in the text. */}
           {userList.length > 0 && (
             <span className="avatar-stack" title={userList.map(([, e]) => e).join(', ')}>
               {userList.slice(0, 4).map(([id, email]) => (
-                <Avatar key={id} userId={id} email={email} />
+                <span key={id} className={isActive(id) ? 'avatar-active' : undefined} style={{ borderRadius: '50%' }}>
+                  <Avatar userId={id} email={email} />
+                </span>
               ))}
               {userList.length > 4 && (
                 <span className="badge" style={{ marginLeft: 6 }}>+{userList.length - 4}</span>
@@ -334,6 +426,12 @@ export default function Editor() {
           <ThemeToggle />
         </div>
       </header>
+
+      {titleError && (
+        <p className="error-text" role="alert" style={{ margin: '0 0 10px' }}>
+          {titleError}
+        </p>
+      )}
 
       {isOwner && shareOpen && (
         <section className="panel" style={{ marginBottom: 16, padding: 16 }}>
@@ -404,13 +502,40 @@ export default function Editor() {
         </section>
       )}
 
-      {!canWrite && (
-        <p className="badge" style={{ marginBottom: 10, color: 'var(--warn)', borderColor: 'var(--warn)' }}>
-          Read-only access
-        </p>
-      )}
+      {/* The sheet. .doc-measure caps the line length; the overlay anchors to
+          it because it is the textarea's offset parent. */}
+      <div className="doc-sheet">
+        <div className="doc-measure editor-shell">
+          <textarea
+            ref={editorRef}
+            className="doc-textarea"
+            readOnly={!canWrite}
+            aria-label="Document body"
+            spellCheck
+          />
 
-      <div className="editor-toolbar">
+          {/* Real guidance instead of a bare placeholder. Sits behind the
+              textarea, which is transparent, and ignores pointer events so
+              clicking it still focuses the text. */}
+          {text.length === 0 && (
+            <div className="doc-hint" aria-hidden="true">
+              {canWrite
+                ? 'Start writing. Everything you type syncs to everyone in this document as you go.'
+                : 'This document is empty.'}
+            </div>
+          )}
+
+          <RemoteCursors
+            textareaRef={editorRef}
+            text={text}
+            cursors={cursors}
+            users={users}
+            selfId={currentUserId}
+          />
+        </div>
+      </div>
+
+      <div className="doc-status">
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <span className={connected ? 'status-ok' : 'status-wait'}>
             {connected ? '\u25CF Synced' : '\u25CB Connecting'}
@@ -425,25 +550,8 @@ export default function Editor() {
         </span>
         <span>
           {wordCount} {wordCount === 1 ? 'word' : 'words'} &middot; {text.length} characters
+          {wordCount > 0 && <> &middot; {readingMinutes} min read</>}
         </span>
-      </div>
-
-      {/* position: relative anchors the cursor overlay to the textarea box. */}
-      <div className="editor-shell">
-        <textarea
-          ref={editorRef}
-          className="editor-area"
-          placeholder="Start typing..."
-          readOnly={!canWrite}
-          spellCheck
-        />
-        <RemoteCursors
-          textareaRef={editorRef}
-          text={text}
-          cursors={cursors}
-          users={users}
-          selfId={currentUserId}
-        />
       </div>
     </div>
   );
