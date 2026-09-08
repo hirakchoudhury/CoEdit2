@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import ThemeToggle from '../components/ThemeToggle';
 
 export default function Register() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const { user, register } = useAuth();
   const navigate = useNavigate();
   useEffect(() => {
@@ -14,56 +16,85 @@ export default function Register() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setError('');
+    setBusy(true);
     try {
       await register(email, password);
       navigate('/', { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed');
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <div style={{ maxWidth: 360, margin: '80px auto', padding: 24 }}>
-      <h1 style={{ marginBottom: 24 }}>Register</h1>
-      <form onSubmit={handleSubmit}>
-        {error && <p style={{ color: '#f87171', marginBottom: 12 }}>{error}</p>}
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', marginBottom: 4 }}>Email</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #3f3f46' }}
-          />
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ display: 'block', marginBottom: 4 }}>Password (min 6)</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={6}
-            style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #3f3f46' }}
-          />
-        </div>
-        <button
-          type="submit"
-          style={{
-            width: '100%',
-            padding: 10,
-            background: '#7c9cff',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-          }}
-        >
-          Register
-        </button>
-      </form>
-      <p style={{ marginTop: 16 }}>
+    <div className="page-narrow">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <ThemeToggle />
+      </div>
+
+      <div style={{ textAlign: 'center', marginBottom: 26 }}>
+        <span className="brand brand-lg">
+          <span className="brand-mark">Co</span>Edit
+        </span>
+        <p className="muted" style={{ margin: '6px 0 0', fontSize: 14 }}>
+          Real-time collaborative editing
+        </p>
+      </div>
+
+      <div className="panel" style={{ padding: 24 }}>
+        <h1 style={{ margin: '0 0 18px', fontSize: 19, fontWeight: 600 }}>Create an account</h1>
+
+        <form onSubmit={handleSubmit}>
+          {error && (
+            <p className="error-text" role="alert" style={{ margin: '0 0 14px' }}>
+              {error}
+            </p>
+          )}
+
+          <div style={{ marginBottom: 14 }}>
+            <label className="label" htmlFor="email">
+              Email
+            </label>
+            <input
+              id="email"
+              className="field"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+
+          <div style={{ marginBottom: 20 }}>
+            <label className="label" htmlFor="password">
+              Password
+            </label>
+            <input
+              id="password"
+              className="field"
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+            <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+              At least 8 characters.
+            </p>
+          </div>
+
+          <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={busy}>
+            {busy ? 'Creating account...' : 'Register'}
+          </button>
+        </form>
+      </div>
+
+      <p className="muted" style={{ marginTop: 16, textAlign: 'center', fontSize: 14 }}>
         Already have an account? <Link to="/login">Log in</Link>
       </p>
     </div>

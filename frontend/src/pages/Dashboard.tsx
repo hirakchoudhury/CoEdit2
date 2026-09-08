@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { listDocuments, createDocument, type DocumentDto } from '../api/documents';
+import ThemeToggle from '../components/ThemeToggle';
+import Avatar from '../components/Avatar';
 
 type FilterMode = 'all' | 'owned' | 'shared';
 
@@ -96,13 +98,22 @@ export default function Dashboard() {
     <div className="page">
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 28 }}>Documents</h1>
+          <span className="brand" style={{ display: 'flex', marginBottom: 2 }}>
+            <span className="brand-mark">Co</span>Edit
+          </span>
+          <h1 style={{ margin: 0, fontSize: 24 }}>Documents</h1>
           <p className="muted" style={{ margin: '6px 0 0' }}>
             Create, open, and collaborate in real time.
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span className="muted">{user?.email}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {user?.userId && user?.email && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <Avatar userId={user.userId} email={user.email} />
+              <span className="muted" style={{ fontSize: 14 }}>{user.email}</span>
+            </span>
+          )}
+          <ThemeToggle />
           <button
             onClick={() => {
               logout();
@@ -150,13 +161,17 @@ export default function Dashboard() {
           className="field"
           style={{ flex: 1, minWidth: 220 }}
         />
-        <button type="button" className={`btn ${filter === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilter('all')}>All</button>
-        <button type="button" className={`btn ${filter === 'owned' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilter('owned')}>Owned</button>
-        <button type="button" className={`btn ${filter === 'shared' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilter('shared')}>Shared</button>
+        <button type="button" className="btn btn-ghost" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All</button>
+        <button type="button" className="btn btn-ghost" aria-pressed={filter === 'owned'} onClick={() => setFilter('owned')}>Owned</button>
+        <button type="button" className="btn btn-ghost" aria-pressed={filter === 'shared'} onClick={() => setFilter('shared')}>Shared</button>
       </section>
 
       {loading ? (
-        <p className="muted">Loading documents...</p>
+        <div className="doc-grid" aria-busy="true" aria-label="Loading documents">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="skeleton" style={{ height: 104 }} />
+          ))}
+        </div>
       ) : filteredDocs.length === 0 ? (
         <div className="panel" style={{ padding: 20 }}>
           <h3 style={{ margin: '0 0 6px' }}>No documents found</h3>
@@ -165,21 +180,16 @@ export default function Dashboard() {
           </p>
         </div>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        <ul className="doc-grid" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
           {filteredDocs.map((doc) => {
             const owned = user?.userId ? doc.ownerId === user.userId : false;
             return (
-            <li
-              key={doc.id}
-              className="panel"
-              style={{ padding: 14, marginBottom: 10, background: 'var(--card)' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
-                <div>
-                  <Link to={`/documents/${doc.id}`} style={{ color: 'inherit', fontWeight: 600, fontSize: 17 }}>
-                    {doc.title}
-                  </Link>
-                  <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <li key={doc.id}>
+                {/* The whole card is the link, so the hit target matches what
+                    the hover state suggests. */}
+                <Link to={`/documents/${doc.id}`} className="doc-card">
+                  <h3 title={doc.title}>{doc.title}</h3>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span className={`badge ${owned ? 'badge-owned' : 'badge-shared'}`}>
                       {owned ? 'Owned' : 'Shared'}
                     </span>
@@ -187,13 +197,9 @@ export default function Dashboard() {
                       Updated {formatRelativeDate(doc.updatedAt)}
                     </span>
                   </div>
-                </div>
-                <Link to={`/documents/${doc.id}`} className="btn btn-ghost" style={{ whiteSpace: 'nowrap' }}>
-                  Open
                 </Link>
-              </div>
-            </li>
-          );
+              </li>
+            );
           })}
         </ul>
       )}

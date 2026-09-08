@@ -1,6 +1,6 @@
 spring:
   application:
-    name: crdt-collab-editor
+    name: coedit
 
   flyway:
     enabled: true

@@ -12,7 +12,9 @@ import {
 } from '../api/documents';
 import { WebSocketProvider, type PresenceCursor } from '../sync/WebSocketProvider';
 import { diffSplice, transformCaret } from '../sync/textDiff';
-import RemoteCursors, { colorForUser } from '../components/RemoteCursors';
+import RemoteCursors from '../components/RemoteCursors';
+import Avatar from '../components/Avatar';
+import ThemeToggle from '../components/ThemeToggle';
 import type { DocumentDto } from '../api/documents';
 
 export default function Editor() {
@@ -24,6 +26,10 @@ export default function Editor() {
   const [cursors, setCursors] = useState<Record<string, PresenceCursor>>({});
   // Mirrors the textarea value so the cursor overlay can re-measure.
   const [text, setText] = useState('');
+  const [shareOpen, setShareOpen] = useState(false);
+  // Snapshot uploads are the only durable save; surface them rather than
+  // leaving the user guessing whether their work is persisted.
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [connected, setConnected] = useState(false);
   const [permissions, setPermissions] = useState<PermissionDto[]>([]);
   const [shareEmail, setShareEmail] = useState('');
@@ -73,7 +79,14 @@ export default function Editor() {
       userId: currentUserId,
       ydoc,
       onSnapshotUpload: async (state) => {
-        await uploadSnapshot(documentId, state);
+        if (!cancelled) setSaveState('saving');
+        try {
+          await uploadSnapshot(documentId, state);
+          if (!cancelled) setSaveState('saved');
+        } catch (err) {
+          if (!cancelled) setSaveState('idle');
+          throw err;
+        }
       },
       onPresence: (u, c) => {
         if (!cancelled) {
@@ -210,17 +223,22 @@ export default function Editor() {
 
   if (error) {
     return (
-      <div style={{ padding: 24 }}>
-        <p style={{ color: '#f87171' }}>{error}</p>
-        <Link to="/">Back to documents</Link>
+      <div className="page-narrow">
+        <div className="panel" style={{ padding: 24, textAlign: 'center' }}>
+          <p className="error-text" style={{ marginTop: 0 }}>{error}</p>
+          <Link to="/" className="btn btn-ghost" style={{ marginTop: 8 }}>
+            Back to documents
+          </Link>
+        </div>
       </div>
     );
   }
 
   if (!docMeta) {
     return (
-      <div style={{ padding: 24 }}>
-        <p>Loading...</p>
+      <div className="page">
+        <div className="skeleton" style={{ height: 28, width: 220, marginBottom: 16 }} />
+        <div className="skeleton" style={{ height: 420 }} />
       </div>
     );
   }
@@ -256,126 +274,167 @@ export default function Editor() {
     }
   }
 
+  const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
+
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto', padding: 24 }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Link to="/" style={{ color: '#a1a1aa' }}>← Documents</Link>
-          <h1 style={{ margin: 0, fontSize: 20 }}>{docMeta.title}</h1>
-          {connected ? (
-            <span style={{ fontSize: 12, color: '#4ade80' }}>● Synced</span>
-          ) : (
-            <span style={{ fontSize: 12, color: '#fbbf24' }}>○ Offline / connecting</span>
-          )}
+    <div className="page">
+      <header
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 12,
+          marginBottom: 18,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <Link to="/" className="btn btn-ghost btn-sm" aria-label="Back to documents">
+            &larr; Documents
+          </Link>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 20,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={docMeta.title}
+          >
+            {docMeta.title}
+          </h1>
         </div>
-        {userList.length > 0 && (
-          <div style={{ fontSize: 14, color: '#a1a1aa' }}>
-            <span style={{ marginRight: 6 }}>Online:</span>
-            {userList.map(([id, email]) => (
-              <span
-                key={id}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  marginRight: 10,
-                  color: '#d4d4d8',
-                }}
-              >
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    background: colorForUser(id),
-                  }}
-                />
-                {email}
-              </span>
-            ))}
-          </div>
-        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* Everyone else currently in the document. The avatar colour is the
+              same hash the cursor overlay uses, so the circle here matches the
+              caret in the text. */}
+          {userList.length > 0 && (
+            <span className="avatar-stack" title={userList.map(([, e]) => e).join(', ')}>
+              {userList.slice(0, 4).map(([id, email]) => (
+                <Avatar key={id} userId={id} email={email} />
+              ))}
+              {userList.length > 4 && (
+                <span className="badge" style={{ marginLeft: 6 }}>+{userList.length - 4}</span>
+              )}
+            </span>
+          )}
+
+          {isOwner && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              aria-expanded={shareOpen}
+              onClick={() => setShareOpen((v) => !v)}
+            >
+              Share
+            </button>
+          )}
+          <ThemeToggle />
+        </div>
       </header>
 
-      {isOwner && (
-        <section style={{ marginBottom: 16, background: '#27272a', border: '1px solid #3f3f46', borderRadius: 8, padding: 12 }}>
-          <h2 style={{ margin: '0 0 8px', fontSize: 16 }}>Share document</h2>
-          <form onSubmit={handleShare} style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+      {isOwner && shareOpen && (
+        <section className="panel" style={{ marginBottom: 16, padding: 16 }}>
+          <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600 }}>Share document</h2>
+
+          <form
+            onSubmit={handleShare}
+            className="stack-mobile"
+            style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}
+          >
             <input
               type="email"
-              placeholder="User email"
+              className="field"
+              placeholder="Email address"
               value={shareEmail}
               onChange={(e) => setShareEmail(e.target.value)}
-              style={{ flex: 1, padding: 10, borderRadius: 6, border: '1px solid #3f3f46', background: '#1f1f23', color: '#e4e4e7' }}
+              style={{ flex: 1, minWidth: 200 }}
               required
             />
             <select
+              className="field"
               value={sharePermission}
               onChange={(e) => setSharePermission(e.target.value as 'READ' | 'WRITE')}
-              style={{ padding: 10, borderRadius: 6, border: '1px solid #3f3f46', background: '#1f1f23', color: '#e4e4e7' }}
+              style={{ width: 'auto' }}
+              aria-label="Permission level"
             >
               <option value="WRITE">Editor</option>
               <option value="READ">Reader</option>
             </select>
-            <button
-              type="submit"
-              disabled={sharing || !shareEmail.trim()}
-              style={{ padding: '10px 14px', borderRadius: 6, border: 'none', background: '#7c9cff', color: '#fff' }}
-            >
+            <button type="submit" className="btn btn-primary" disabled={sharing || !shareEmail.trim()}>
               {sharing ? 'Sharing...' : 'Share'}
             </button>
           </form>
-          {shareError && <p style={{ margin: '4px 0 10px', color: '#f87171', fontSize: 14 }}>{shareError}</p>}
+
+          {shareError && (
+            <p className="error-text" role="alert" style={{ margin: '0 0 12px' }}>
+              {shareError}
+            </p>
+          )}
+
           {permissions.length > 0 && (
-            <div style={{ display: 'grid', gap: 6 }}>
-              {permissions.map((p) => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 14 }}>
-                  <span style={{ color: '#d4d4d8' }}>
-                    {p.userEmail || p.userId} - {p.permission}
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+              {permissions.map((perm) => (
+                <li
+                  key={perm.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    fontSize: 14,
+                  }}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <Avatar userId={perm.userId} email={perm.userEmail || perm.userId} size={24} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {perm.userEmail || perm.userId}
+                    </span>
+                    <span className="badge">{perm.permission}</span>
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => handleRevoke(p.userId)}
-                    style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #3f3f46', background: 'transparent', color: '#e4e4e7' }}
-                  >
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => handleRevoke(perm.userId)}>
                     Remove
                   </button>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </section>
       )}
 
       {!canWrite && (
-        <p style={{ marginBottom: 10, color: '#fbbf24', fontSize: 14 }}>
-          You have read-only access to this document.
+        <p className="badge" style={{ marginBottom: 10, color: 'var(--warn)', borderColor: 'var(--warn)' }}>
+          Read-only access
         </p>
       )}
 
+      <div className="editor-toolbar">
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span className={connected ? 'status-ok' : 'status-wait'}>
+            {connected ? '\u25CF Synced' : '\u25CB Connecting'}
+          </span>
+          <span>
+            {saveState === 'saving'
+              ? 'Saving...'
+              : saveState === 'saved'
+                ? 'All changes saved'
+                : 'Changes sync live'}
+          </span>
+        </span>
+        <span>
+          {wordCount} {wordCount === 1 ? 'word' : 'words'} &middot; {text.length} characters
+        </span>
+      </div>
+
       {/* position: relative anchors the cursor overlay to the textarea box. */}
-      <div style={{ position: 'relative' }}>
+      <div className="editor-shell">
         <textarea
           ref={editorRef}
+          className="editor-area"
           placeholder="Start typing..."
           readOnly={!canWrite}
-          style={{
-            width: '100%',
-            minHeight: 400,
-            padding: 16,
-            borderRadius: 8,
-            border: '1px solid #3f3f46',
-            background: '#27272a',
-            color: '#e4e4e7',
-            fontSize: 16,
-            lineHeight: 1.5,
-            resize: 'vertical',
-            opacity: canWrite ? 1 : 0.75,
-            display: 'block',
-            // The mirror cannot reproduce a horizontal scroll offset, so keep
-            // wrapping on and let the overlay handle vertical scroll only.
-            overflowX: 'hidden',
-          }}
           spellCheck
         />
         <RemoteCursors
